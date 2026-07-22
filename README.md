@@ -1,6 +1,6 @@
-# AutoStats
+# autostats
 
-AutoStats is an AI agent that runs rigorous statistical analyses on real, user-provided
+autostats is an AI agent that runs rigorous statistical analyses on real, user-provided
 datasets. It never computes statistics itself or invents numbers: every statistic,
 p-value, model coefficient, or forecast it reports comes from an actual tool call, and
 the LLM's job is to choose the right tool, chain calls together (upload → describe →
