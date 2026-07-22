@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AutoStats report — {{ session_id }}</title>
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 860px; margin: 2rem auto; color: #222; }
+  h1 { font-size: 1.4rem; }
+  section.result { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+  section.result h2 { font-size: 1.05rem; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid #e0e0e0; padding: 4px 8px; text-align: left; }
+  .warn { color: #a15c00; }
+  .fail { color: #b00020; }
+  .pass { color: #2e7d32; }
+  img { max-width: 100%; margin: 0.5rem 0; }
+</style>
+</head>
+<body>
+<h1>AutoStats report — session {{ session_id }}</h1>
+{% if narrative %}<p>{{ narrative }}</p>{% endif %}
+
+{% for r in results %}
+<section class="result">
+  <h2>{{ loop.index }}. {{ r.test_name }}</h2>
+  <p>{{ r.interpretation }}</p>
+  {% if r.statistic is not none %}<p>statistic = {{ "%.4f"|format(r.statistic) }}{% if r.p_value is not none %}, p = {{ "%.4f"|format(r.p_value) }}{% endif %}</p>{% endif %}
+  {% if r.assumptions %}
+  <ul>
+    {% for a in r.assumptions %}
+    <li class="{{ 'pass' if a.passed else 'fail' }}">{{ a.detail }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% for t in r.tables %}
+  <table>
+    <tr>{% for c in t.columns %}<th>{{ c }}</th>{% endfor %}</tr>
+    {% for row in t.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+  </table>
+  {% endfor %}
+  {% for p in r.plots %}
+  <img src="file://{{ p.path }}" alt="{{ p.title }}">
+  {% endfor %}
+  {% if r.warnings %}<p class="warn">{{ r.warnings | join(" ") }}</p>{% endif %}
+</section>
+{% endfor %}
+</body>
+</html>
