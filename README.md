@@ -5,7 +5,7 @@ datasets. It never computes statistics itself or invents numbers: every statisti
 p-value, model coefficient, or forecast it reports comes from an actual tool call, and
 the LLM's job is to choose the right tool, chain calls together (upload → describe →
 test → report), and narrate results it is only allowed to *quote or closely paraphrase*
-from each tool's deterministic `interpretation` field.
+from each tool's deterministic `interpretation` field. This agent is intended to assist researchers by automating robust statistical analyses and presenting findings intuitively on its own.
 
 See `src/autostats/core/agent/prompts.py` for the exact rules the model operates under.
 
@@ -113,7 +113,7 @@ homogeneity, sample size, multicollinearity, independence-by-design, etc.),
 prompt requires the model to surface a failed assumption and its recommended
 alternative rather than silently reporting the primary test.
 
-### Declared but not yet implemented
+### Declared but not yet implemented (to be implemented in the future)
 
 These have dependencies listed in `pyproject.toml` and/or fields already in the
 schemas, but no working code behind them yet — useful to know before assuming a
@@ -156,25 +156,3 @@ in sequence, and that its prose matches the tool's `interpretation` field verbat
 near-verbatim (that's the grounding guarantee — if it doesn't, something's wrong with
 the prompt or the loop).
 
-## Debugging tips
-
-- **Tool errors don't crash a turn.** `run_turn` catches any exception raised inside
-  `REGISTRY.dispatch` and feeds `{"error": str(exc)}` back to the model as the tool
-  result, so the model can react (e.g. re-check a column name) instead of the whole
-  request failing. A *turn-level* exception (e.g. the OpenAI call itself failing)
-  does end the turn early with an `ErrorEvent` and no `TurnComplete`.
-- **Where state lives:** `AUTOSTATS_DATA_DIR/sessions.db` (SQLite — messages +
-  accumulated `AnalysisResult`s), `AUTOSTATS_DATA_DIR/sessions/<id>/datasets/*.parquet`
-  (registered dataframes), `AUTOSTATS_DATA_DIR/sessions/<id>/plots/*.png`. Deleting a
-  session's row from `sessions.db` does **not** delete its parquet/plot files.
-  `DataManager` only rebuilds its in-memory dataset *catalog* (`_meta`, used for the
-  system prompt's `catalog_text()`) from `register()` calls in the current process —
-  it does not re-scan disk on restart, so a fresh process restarts with catalogs empty
-  even though the parquet files are still there.
-  `two_sample_t_test`/`mann_whitney_u_test`/etc. require **exactly 2** groups in
-  `group_col`, or the tool raises (surfaced to the model as a tool error, per above).
-- **ARIMA needs two calls, in order:** `fit_arima_model` then `forecast_time_series` —
-  the fitted model is cached in-memory on the `DataManager` (`_arima_models`,
-  keyed by `f"{dataset_id}:{column}"`), not persisted, so it's lost on process restart.
-- **`pmdarima` is optional:** if it's not installed, `fit_arima_model` silently falls
-  back to a fixed `(1,1,1)` order instead of auto-selecting one.
