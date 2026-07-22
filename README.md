@@ -54,7 +54,7 @@ note that this **bypasses** the `AUTOSTATS_` prefix every other setting uses. Ot
 useful overrides, same `.env` file:
 
 ```
-AUTOSTATS_OPENAI_MODEL=gpt-4o-mini   # default is gpt-5 — override for cheaper/faster runs
+AUTOSTATS_OPENAI_MODEL=gpt-5.4-mini   # default is gpt-5.5 — override for cheaper/faster runs
 AUTOSTATS_DATA_DIR=./data            # where sessions.db, datasets, and plots are written (relative to cwd)
 ```
 

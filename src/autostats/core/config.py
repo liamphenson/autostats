@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AUTOSTATS_", extra="ignore")
 
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    openai_model: str = "gpt-5"
+    openai_model: str = "gpt-5.5"
 
     data_dir: Path = Path("./data")
     fred_api_key: str = ""
