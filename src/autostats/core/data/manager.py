@@ -30,7 +30,7 @@ class DataManager:
     def register(
         self,
         df: pd.DataFrame,
-        source: Literal["upload", "fred", "world_bank", "census", "web_scrape"],
+        source: Literal["upload", "fred", "world_bank", "census", "web_scrape", "derived"],
         source_metadata: dict[str, Any] | None = None,
         trust_level: Literal["high", "medium", "low"] = "high",
         validation_warnings: list[str] | None = None,

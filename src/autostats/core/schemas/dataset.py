@@ -17,7 +17,7 @@ class DatasetMeta(BaseModel):
     n_cols: int
     columns: list[ColumnInfo]
     preview: list[dict[str, Any]]
-    source: Literal["upload", "fred", "world_bank", "census", "web_scrape"]
+    source: Literal["upload", "fred", "world_bank", "census", "web_scrape", "derived"]
     source_metadata: dict[str, Any] = Field(default_factory=dict)
     trust_level: Literal["high", "medium", "low"] = "high"
     validation_warnings: list[str] = Field(default_factory=list)

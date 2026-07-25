@@ -6,7 +6,7 @@ same call works for a stateless API request and a long-lived chat session.
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 
 from openai import OpenAI
 
@@ -51,15 +51,7 @@ class AutoStatsAgent:
         plots_dir = str(self.settings.sessions_dir / session_id / "plots")
         ctx = ToolContext(session_id=session_id, data_manager=data_manager, plots_dir=plots_dir)
 
-        state = self.session_store.get(session_id)
-        input_items: list[dict] = [
-            {"role": "system", "content": build_system_prompt(data_manager.catalog_text())}
-        ]
-        for m in state.messages:
-            role = "assistant" if m.role == "tool" else m.role
-            input_items.append({"role": role, "content": m.content})
-        input_items.append({"role": "user", "content": user_message})
-
+        input_items = self._build_input_items(session_id, data_manager, user_message)
         self.session_store.append_message(session_id, Message(role="user", content=user_message))
 
         tools = REGISTRY.to_openai_tools()
@@ -76,13 +68,9 @@ class AutoStatsAgent:
                 function_calls = [item for item in response.output if item.type == "function_call"]
                 message_items = [item for item in response.output if item.type == "message"]
 
-                for item in message_items:
-                    text = "".join(
-                        c.text for c in item.content if getattr(c, "type", None) == "output_text"
-                    )
-                    if text:
-                        final_text += text
-                        yield TextDelta(text=text)
+                for event in self._text_events(message_items):
+                    final_text += event.text
+                    yield event
 
                 if not function_calls:
                     break
@@ -90,19 +78,7 @@ class AutoStatsAgent:
                 input_items.extend(response.output)
 
                 for call in function_calls:
-                    arguments = json.loads(call.arguments)
-                    yield ToolCallStarted(tool_name=call.name, arguments=arguments)
-                    try:
-                        result = REGISTRY.dispatch(ctx, call.name, arguments)
-                    except Exception as exc:  # noqa: BLE001 -- surfaced to the model, not raised
-                        output = {"error": str(exc)}
-                    else:
-                        output = result.model_dump(mode="json")
-                        if isinstance(result, StatResult):
-                            self.session_store.add_result(session_id, AnalysisResult(result=result))
-                            for plot in result.plots:
-                                yield PlotReady(plot_id=plot.plot_id, path=plot.path)
-                    yield ToolResultReady(tool_name=call.name, result=output)
+                    output = yield from self._handle_tool_call(ctx, call)
                     input_items.append(
                         {
                             "type": "function_call_output",
@@ -119,3 +95,43 @@ class AutoStatsAgent:
 
         self.session_store.append_message(session_id, Message(role="assistant", content=final_text))
         yield TurnComplete(final_text=final_text)
+
+    def _build_input_items(self, session_id: str, data_manager: DataManager, user_message: str) -> list[dict]:
+        state = self.session_store.get(session_id)
+        input_items: list[dict] = [
+            {"role": "system", "content": build_system_prompt(data_manager.catalog_text())}
+        ]
+        for m in state.messages:
+            role = "assistant" if m.role == "tool" else m.role
+            input_items.append({"role": role, "content": m.content})
+        input_items.append({"role": "user", "content": user_message})
+        return input_items
+
+    @staticmethod
+    def _text_events(message_items: list) -> Iterator[TextDelta]:
+        """Yield a TextDelta for each message item's non-empty output text."""
+        for item in message_items:
+            if text := "".join(
+                c.text
+                for c in item.content
+                if getattr(c, "type", None) == "output_text"
+            ):
+                yield TextDelta(text=text)
+
+    def _handle_tool_call(self, ctx: ToolContext, call) -> Generator[AgentEvent, None, dict]:
+        """Dispatch one tool call, yielding its events; returns the JSON-able
+        output to record as this call's `function_call_output`."""
+        arguments = json.loads(call.arguments)
+        yield ToolCallStarted(tool_name=call.name, arguments=arguments)
+        try:
+            result = REGISTRY.dispatch(ctx, call.name, arguments)
+        except Exception as exc:  # noqa: BLE001 -- surfaced to the model, not raised
+            output = {"error": str(exc)}
+        else:
+            output = result.model_dump(mode="json")
+            if isinstance(result, StatResult):
+                self.session_store.add_result(ctx.session_id, AnalysisResult(result=result))
+                for plot in result.plots:
+                    yield PlotReady(plot_id=plot.plot_id, path=plot.path)
+        yield ToolResultReady(tool_name=call.name, result=output)
+        return output

@@ -83,6 +83,14 @@ prompt changes required.
 - `list_datasets` — list datasets loaded in this session
 - `get_dataset_preview` — first N rows + dtypes of a loaded dataset
 
+**Preprocessing** (`preprocessing`)
+- `one_hot_encode`, `dummy_encode` (one-hot with the reference category dropped — the standard
+  choice for regression predictors), `ordinal_encode` (needs a genuine category order),
+  `label_encode` (arbitrary codes, not for direct use as a regression predictor), `target_encode`
+  (in-sample category → target mean, flagged for leakage risk)
+- Each registers the encoded result as a **new** `dataset_id` (`source="derived"`, inheriting the
+  parent's `trust_level`) rather than mutating the original in place
+
 **Descriptive** (`descriptive`)
 - `describe_dataset` — count/mean/std/min/max/quartiles for numeric columns
 - `correlation_matrix` — Pearson or Spearman correlation matrix

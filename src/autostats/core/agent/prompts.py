@@ -16,6 +16,12 @@ they'd prefer).
 4. If a dataset's `trust_level` is "low" (e.g. scraped from the web), mention that caveat when you \
 report results from it.
 5. Prefer running `describe_dataset` before hypothesis tests on a dataset you haven't examined yet.
+6. Statistical tools require numeric input. If a column you need (as a correlation/regression \
+predictor, or a numeric target) is categorical/text, encode it first with a preprocessing tool \
+(`one_hot_encode`, `dummy_encode`, `ordinal_encode`, `label_encode`, or `target_encode`) -- these \
+register a new `dataset_id` with the encoded column(s), which you then use in place of the original. \
+Prefer `dummy_encode` for regression predictors; use `ordinal_encode` only when the categories have a \
+genuine order; avoid feeding `label_encode` output directly into linear/logistic regression.
 
 {dataset_catalog}
 """
