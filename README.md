@@ -19,22 +19,6 @@ See `src/autostats/core/agent/prompts.py` for the exact rules the model operates
 | Session store | `core/session/store.py` | SQLite-backed message history + accumulated `AnalysisResult`s, keyed by `session_id`. |
 | Report builder | `core/reporting/builder.py` | Renders a session's accumulated results to HTML, PDF, or a Jupyter notebook. |
 
-## Submission info
-
-- **Build path:** a custom handler wrapping existing code (not a hand-authored tool loop).
-- **Entry-point file / class:** `handler.py`, class `AutoStatsHandler`.
-- **Input / output:** takes the user's text request plus any attached dataset file(s)
-  (CSV/TSV/Excel/JSON/Parquet); returns a dict with `answer` (human-readable text),
-  `tools_used` (the tool-call trace), and optionally `plots` (base64-encoded PNGs).
-- **Verified locally:** runs and returns a completed result with a populated `answer`.
-- **Dependencies:** Python packages via `pyproject.toml` (see Install below). One
-  system-binary dependency: the optional `report-pdf` extra (`weasyprint`) needs system
-  libraries (Pango, cairo, gdk-pixbuf) — only needed for PDF report export; HTML/notebook
-  export don't need it.
-- **Hardware:** none — no GPU or unusual memory requirements.
-- **Secrets:** only `OPENAI_API_KEY` (see Install below); no keys or `.env` files are
-  included in this repo.
-
 ## Install
 
 ```bash
@@ -88,8 +72,12 @@ prompt changes required.
   choice for regression predictors), `ordinal_encode` (needs a genuine category order),
   `label_encode` (arbitrary codes, not for direct use as a regression predictor), `target_encode`
   (in-sample category → target mean, flagged for leakage risk)
-- Each registers the encoded result as a **new** `dataset_id` (`source="derived"`, inheriting the
-  parent's `trust_level`) rather than mutating the original in place
+- `box_cox_transform` — another way to address OLS inadequacy (alongside
+  `weighted_linear_regression`/`irls_regression`): finds the MLE lambda and its 95% CI by
+  sweeping the profile log-likelihood, and applies the nearest interpretable lambda (log,
+  sqrt, inverse, ...) instead of the raw MLE when one is statistically justified by that CI
+- Each registers the transformed result as a **new** `dataset_id` (`source="derived"`, inheriting
+  the parent's `trust_level`) rather than mutating the original in place
 
 **Descriptive** (`descriptive`)
 - `describe_dataset` — count/mean/std/min/max/quartiles for numeric columns
@@ -107,6 +95,11 @@ prompt changes required.
 
 **Regression** (`regression`)
 - `linear_regression` — OLS with VIF, Durbin-Watson, Breusch-Pagan diagnostics
+- `weighted_linear_regression` — WLS given a known column of weights (e.g. inverse-variance);
+  same diagnostics as `linear_regression`
+- `irls_regression` — like `weighted_linear_regression`, but for when you *don't* have known
+  weights: iteratively estimates a variance function from the residuals and refits until the
+  weights stabilize
 - `logistic_regression` — binary outcomes, reports odds ratios + McFadden pseudo-R²
 
 **Time series** (`timeseries`)

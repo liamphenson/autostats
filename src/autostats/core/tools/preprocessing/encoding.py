@@ -1,36 +1,9 @@
 import pandas as pd
 from pydantic import BaseModel
 
-from autostats.core.schemas.dataset import DatasetHandle
 from autostats.core.tools.base import BaseTool, ToolContext, ToolInput
+from autostats.core.tools.preprocessing.shared import register_derived, require_columns
 from autostats.core.tools.registry import REGISTRY
-
-
-def _require_columns(df: pd.DataFrame, columns: list[str]) -> None:
-    if missing := [c for c in columns if c not in df.columns]:
-        raise ValueError(f"Column(s) not found in dataset: {missing}")
-
-
-def _register_derived(
-    ctx: ToolContext,
-    dataset_id: str,
-    new_df: pd.DataFrame,
-    *,
-    method: str,
-    extra_metadata: dict,
-    warnings: list[str] | None = None,
-) -> DatasetHandle:
-    """Register an encoded dataframe as a new dataset, inheriting the parent's
-    trust_level so a caveat on the original (e.g. low-trust scraped data)
-    survives the transform."""
-    parent_trust = ctx.data_manager.get_meta(dataset_id).trust_level
-    return ctx.data_manager.register(
-        new_df,
-        source="derived",
-        source_metadata={"derived_from": dataset_id, "method": method, **extra_metadata},
-        trust_level=parent_trust,
-        validation_warnings=warnings or [],
-    )
 
 
 class OneHotEncodeInput(ToolInput):
@@ -49,7 +22,7 @@ class OneHotEncodeTool(BaseTool):
 
     def run(self, ctx: ToolContext, params: OneHotEncodeInput) -> BaseModel:
         df = ctx.data_manager.load(params.dataset_id)
-        _require_columns(df, params.columns)
+        require_columns(df, params.columns)
         encoded = pd.get_dummies(df, columns=params.columns, prefix=params.columns, drop_first=False)
         new_columns = [c for c in encoded.columns if c not in df.columns]
         encoded[new_columns] = encoded[new_columns].astype(int)
@@ -58,7 +31,7 @@ class OneHotEncodeTool(BaseTool):
             for c in params.columns
             if df[c].nunique() > 15
         ]
-        return _register_derived(
+        return register_derived(
             ctx,
             params.dataset_id,
             encoded,
@@ -86,11 +59,11 @@ class DummyEncodeTool(BaseTool):
 
     def run(self, ctx: ToolContext, params: DummyEncodeInput) -> BaseModel:
         df = ctx.data_manager.load(params.dataset_id)
-        _require_columns(df, params.columns)
+        require_columns(df, params.columns)
         encoded = pd.get_dummies(df, columns=params.columns, prefix=params.columns, drop_first=True)
         new_columns = [c for c in encoded.columns if c not in df.columns]
         encoded[new_columns] = encoded[new_columns].astype(int)
-        return _register_derived(
+        return register_derived(
             ctx,
             params.dataset_id,
             encoded,
@@ -117,7 +90,7 @@ class OrdinalEncodeTool(BaseTool):
 
     def run(self, ctx: ToolContext, params: OrdinalEncodeInput) -> BaseModel:
         df = ctx.data_manager.load(params.dataset_id)
-        _require_columns(df, [params.column])
+        require_columns(df, [params.column])
         categories = {str(c) for c in df[params.column].dropna().unique()}
         warnings = []
         if params.order is None:
@@ -133,7 +106,7 @@ class OrdinalEncodeTool(BaseTool):
         mapping = {cat: i for i, cat in enumerate(order)}
         new_df = df.copy()
         new_df[params.column] = df[params.column].astype(str).map(mapping)
-        return _register_derived(
+        return register_derived(
             ctx,
             params.dataset_id,
             new_df,
@@ -160,12 +133,12 @@ class LabelEncodeTool(BaseTool):
 
     def run(self, ctx: ToolContext, params: LabelEncodeInput) -> BaseModel:
         df = ctx.data_manager.load(params.dataset_id)
-        _require_columns(df, [params.column])
+        require_columns(df, [params.column])
         categories = sorted(str(c) for c in df[params.column].dropna().unique())
         mapping = {cat: i for i, cat in enumerate(categories)}
         new_df = df.copy()
         new_df[params.column] = df[params.column].astype(str).map(mapping)
-        return _register_derived(
+        return register_derived(
             ctx,
             params.dataset_id,
             new_df,
@@ -199,7 +172,7 @@ class TargetEncodeTool(BaseTool):
 
     def run(self, ctx: ToolContext, params: TargetEncodeInput) -> BaseModel:
         df = ctx.data_manager.load(params.dataset_id)
-        _require_columns(df, [params.column, params.target_column])
+        require_columns(df, [params.column, params.target_column])
         if not pd.api.types.is_numeric_dtype(df[params.target_column]):
             raise ValueError(f"target_column '{params.target_column}' must be numeric")
         if params.smoothing < 0:
@@ -215,7 +188,7 @@ class TargetEncodeTool(BaseTool):
 
         new_df = df.copy()
         new_df[params.column] = df[params.column].map(mapping)
-        return _register_derived(
+        return register_derived(
             ctx,
             params.dataset_id,
             new_df,
