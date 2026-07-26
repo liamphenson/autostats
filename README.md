@@ -76,6 +76,9 @@ prompt changes required.
   `weighted_linear_regression`/`irls_regression`): finds the MLE lambda and its 95% CI by
   sweeping the profile log-likelihood, and applies the nearest interpretable lambda (log,
   sqrt, inverse, ...) instead of the raw MLE when one is statistically justified by that CI
+- `train_test_split` / `train_validation_test_split` — split a dataset into 2 or 3 subsets
+  (`test_size`, optionally `validation_size`; optional `shuffle` + `random_state` for a
+  reproducible shuffle); rejects a split that would leave any resulting subset empty
 - Each registers the transformed result as a **new** `dataset_id` (`source="derived"`, inheriting
   the parent's `trust_level`) rather than mutating the original in place
 

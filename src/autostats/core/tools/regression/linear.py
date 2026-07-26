@@ -254,7 +254,7 @@ def _backward_elimination_is_better(score: float, best_score: float | None, crit
     predictor safest/most justified to remove)."""
     if best_score is None:
         return True
-    if criterion in ("aic", "bic"):
+    if criterion in {"aic", "bic"}:
         return score < best_score  # lower resulting AIC/BIC after removal -> safer to remove
     # r_squared: higher resulting adjusted R-squared after removal -> safer to remove.
     # p_value: higher (less significant) p-value in the current model -> safer to remove.

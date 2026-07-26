@@ -9,7 +9,7 @@ from autostats.core.tools.registry import REGISTRY
 
 # Common, interpretable lambda values preferred over an arbitrary continuous MLE when
 # they're statistically justified -- i.e. they fall inside the 95% CI.
-_INTERPRETABLE_LAMBDAS = [-2, -1, -0.5, 0, 0.5, 1, 2]
+_INTERPRETABLE_LAMBDAS = [-3, -2, -1, -0.5, 0, 0.5, 1, 2, 3]
 
 
 class BoxCoxTransformInput(ToolInput):
