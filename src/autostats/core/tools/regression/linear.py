@@ -1,4 +1,6 @@
 from typing import Literal
+import itertools
+import math
 
 import numpy as np
 import pandas as pd
@@ -33,14 +35,16 @@ class LinearRegressionTool(BaseTool):
 
     def run(self, ctx: ToolContext, params: LinearRegressionInput) -> BaseModel:
         data = self._load_data(ctx, params)
-        X = sm.add_constant(data[params.predictors])
+        predictors = list(dict.fromkeys(params.predictors))
+        X = sm.add_constant(data[predictors])
         y = data[params.target]
         model = self._fit(X, y, data, params)
-        return self._build_result(model, data, params)
+        return self._build_result(model, data, params, predictors=predictors)
 
     def _load_data(self, ctx: ToolContext, params: LinearRegressionInput):
         df = ctx.data_manager.load(params.dataset_id)
-        return df[[params.target, *params.predictors]].dropna()
+        predictors = list(dict.fromkeys(params.predictors))
+        return df[[params.target, *predictors]].dropna()
 
     def _fit(self, X, y, data, params: LinearRegressionInput):
         return sm.OLS(y, X).fit()
@@ -144,7 +148,8 @@ class WeightedLinearRegressionTool(LinearRegressionTool):
 
     def _load_data(self, ctx: ToolContext, params: WeightedLinearRegressionInput):
         df = ctx.data_manager.load(params.dataset_id)
-        return df[[params.target, *params.predictors, params.weights_column]].dropna()
+        predictors = list(dict.fromkeys(params.predictors))
+        return df[[params.target, *predictors, params.weights_column]].dropna()
 
     def _fit(self, X, y, data, params: WeightedLinearRegressionInput):
         weights = data[params.weights_column]
@@ -313,7 +318,8 @@ class ForwardSelectionTool(LinearRegressionTool):
 
     def _load_data(self, ctx: ToolContext, params: ForwardSelectionInput):
         df = ctx.data_manager.load(params.dataset_id)
-        return df[[params.target, *params.candidate_predictors]].dropna()
+        candidates = list(dict.fromkeys(params.candidate_predictors))
+        return df[[params.target, *candidates]].dropna()
 
     def run(self, ctx: ToolContext, params: ForwardSelectionInput) -> BaseModel:
         if not params.candidate_predictors:
@@ -401,7 +407,8 @@ class BackwardEliminationTool(LinearRegressionTool):
 
     def _load_data(self, ctx: ToolContext, params: BackwardEliminationInput):
         df = ctx.data_manager.load(params.dataset_id)
-        return df[[params.target, *params.predictors]].dropna()
+        predictors = list(dict.fromkeys(params.predictors))
+        return df[[params.target, *predictors]].dropna()
 
     def run(self, ctx: ToolContext, params: BackwardEliminationInput) -> BaseModel:
         if not params.predictors:
@@ -455,3 +462,129 @@ class BackwardEliminationTool(LinearRegressionTool):
 
     def _extra_raw_summary(self, model) -> dict:
         return {"criterion": model.backward_elimination_criterion, "steps": model.backward_elimination_steps}
+
+# Best-subset search is exhaustive: sum_{k=1}^{max_predictors} C(len(candidates), k) models.
+# That grows explosively (e.g. 18 candidates with max_predictors=9 is ~155k models, which
+# took 87s in testing) -- fail fast with a clear message instead of hanging a tool call.
+_MAX_SUBSETS_TO_EVALUATE = 50_000
+
+
+def _total_subset_count(n_candidates: int, max_predictors: int) -> int:
+    k_max = min(max_predictors, n_candidates)
+    return sum(math.comb(n_candidates, k) for k in range(1, k_max + 1))
+
+
+def _best_subset_score(model, criterion: str, predictors: list[str]) -> float:
+    if criterion == "aic":
+        return model.aic
+    if criterion == "bic":
+        return model.bic
+    if criterion == "r_squared":
+        return model.rsquared_adj
+    if criterion == "p_value":
+        # The subset's least-significant predictor's p-value (the one "provided it is
+        # below 'alpha'" in the tool description refers to) -- NOT a single named
+        # candidate the way forward/backward selection score p_value, since best-subset
+        # scores a whole subset at once, not one addition/removal.
+        return max(model.pvalues[p] for p in predictors)
+    raise ValueError(f"Unknown criterion: {criterion}")  # pragma: no cover -- guarded by pydantic Literal
+
+
+class BestSubsetSelectionInput(ToolInput):
+    target: str
+    candidate_predictors: list[str]
+    criterion: Literal["aic", "bic", "r_squared", "p_value"] = "aic"
+    max_predictors: int = 10
+    alpha: float = 0.05
+
+@REGISTRY.register
+class BestSubsetSelectionTool(LinearRegressionTool):
+    name = "best_subset_selection"
+    description = (
+        "Best subset selection for a linear regression: fits all possible models with up to "
+        "'max_predictors' predictors from 'candidate_predictors', and selects the best model "
+        "under 'criterion'. Criteria: 'aic'/'bic' select the model with the lowest AIC/BIC; "
+        "'r_squared' selects the model with the highest *adjusted* R-squared; 'p_value' selects "
+        "the model whose least significant predictor is most significant, provided it is below "
+        "'alpha' (subsets with any less-significant predictor are excluded). This is exhaustive "
+        "and can be slow for a large candidate pool -- it fails fast with a clear error if the "
+        "number of models to fit would be excessive; use forward_selection or backward_elimination "
+        "instead in that case. Reports the same diagnostics as linear_regression for the final "
+        "selected model, plus the predictors in that model."
+    )
+    category = "regression"
+    input_model = BestSubsetSelectionInput
+
+    _table_id_prefix = "best_subset_selection_coef"
+    _label = "Best-subset-selected OLS regression"
+
+    def _load_data(self, ctx: ToolContext, params: BestSubsetSelectionInput):
+        df = ctx.data_manager.load(params.dataset_id)
+        # De-duplicated here too (not just in run()'s search loop): otherwise a
+        # repeated candidate name makes `data` itself carry a genuinely duplicate-named
+        # column, and `data[["x1"]]` on that returns *both* matching columns instead of
+        # one -- the actual root cause behind the "truth value of a Series is ambiguous"
+        # crash, since a duplicate-column dataframe then propagates into the fitted
+        # model's `pvalues` index too.
+        candidates = list(dict.fromkeys(params.candidate_predictors))
+        return df[[params.target, *candidates]].dropna()
+
+    def run(self, ctx: ToolContext, params: BestSubsetSelectionInput) -> BaseModel:
+        if not params.candidate_predictors:
+            raise ValueError("candidate_predictors must not be empty")
+        if params.max_predictors < 1:
+            raise ValueError("max_predictors must be >= 1")
+
+        # De-duplicate while preserving order, same as forward_selection/backward_elimination --
+        # otherwise a repeated name produces a subset with a duplicate column label downstream.
+        candidates = list(dict.fromkeys(params.candidate_predictors))
+
+        total_subsets = _total_subset_count(len(candidates), params.max_predictors)
+        if total_subsets > _MAX_SUBSETS_TO_EVALUATE:
+            raise ValueError(
+                f"Best subset selection would need to fit {total_subsets:,} models (from "
+                f"{len(candidates)} candidates, max_predictors={params.max_predictors}), which "
+                f"exceeds the {_MAX_SUBSETS_TO_EVALUATE:,}-model safety cap. Reduce "
+                "candidate_predictors or max_predictors, or use forward_selection/"
+                "backward_elimination instead for a large candidate pool."
+            )
+
+        data = self._load_data(ctx, params)
+        y = data[params.target]
+        best_model, best_score, best_predictors = None, None, None
+
+        for k in range(1, min(params.max_predictors, len(candidates)) + 1):
+            for subset in itertools.combinations(candidates, k):
+                trial_model = self._fit_ols(y, data[list(subset)])
+                score = _best_subset_score(trial_model, params.criterion, list(subset))
+                if params.criterion == "p_value" and score >= params.alpha:
+                    continue  # at least one predictor in this subset isn't significant enough
+                if _forward_selection_is_better(score, best_score, params.criterion):
+                    best_model, best_score, best_predictors = trial_model, score, list(subset)
+
+        if best_model is None:
+            reason = (
+                f"no subset had every predictor significant below alpha={params.alpha}"
+                if params.criterion == "p_value"
+                else "none improved on the initial baseline"
+            )
+            raise ValueError(
+                f"Best subset selection under criterion '{params.criterion}' did not select any "
+                f"model from {candidates} -- {reason}."
+            )
+
+        best_model.best_subset_selection_criterion = params.criterion
+        return self._build_result(best_model, data, params, predictors=best_predictors)
+
+    @staticmethod
+    def _fit_ols(y: pd.Series, predictors_df: pd.DataFrame):
+        X = sm.add_constant(predictors_df, has_constant="add")
+        return sm.OLS(y, X).fit()
+
+    def _extra_interpretation(self, model) -> str:
+        predictors = model.model.exog_names[1:]  # skip the constant
+        return f" Best subset selection ({model.best_subset_selection_criterion}) selected predictors: {predictors}."
+
+    def _extra_raw_summary(self, model) -> dict:
+        predictors = model.model.exog_names[1:]  # skip the constant
+        return {"selected_predictors": predictors}

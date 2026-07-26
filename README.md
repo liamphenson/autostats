@@ -110,6 +110,7 @@ prompt changes required.
 - `backward_elimination` — the same idea in reverse: starts from all predictors and removes
   the least-justified one at a time, by the same four criteria, until removing any remaining
   one would make the model worse
+- `best_subset_selection` — exhaustive feature selection which finds the best combination of predictors for each fixed size, then selects the overall best model using penalized evaluation criteria.
 - `logistic_regression` — binary outcomes, reports odds ratios + McFadden pseudo-R²
 
 **Time series** (`timeseries`)
