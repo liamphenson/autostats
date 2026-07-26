@@ -38,7 +38,7 @@ note that this **bypasses** the `AUTOSTATS_` prefix every other setting uses. Ot
 useful overrides, same `.env` file:
 
 ```
-AUTOSTATS_OPENAI_MODEL=gpt-5.4-mini   # default is gpt-5.5 — override for cheaper/faster runs
+AUTOSTATS_OPENAI_MODEL=gpt-5.6-luna   # default is gpt-5.6-terra — override for cheaper/faster runs
 AUTOSTATS_DATA_DIR=./data            # where sessions.db, datasets, and plots are written (relative to cwd)
 ```
 
@@ -100,6 +100,13 @@ prompt changes required.
 - `irls_regression` — like `weighted_linear_regression`, but for when you *don't* have known
   weights: iteratively estimates a variance function from the residuals and refits until the
   weights stabilize
+- `forward_selection` — forward stepwise predictor selection from a candidate pool, by
+  `aic`, `bic`, `r_squared` (adjusted — plain R² never decreases, so it can't stop a search),
+  or `p_value`; reports the same diagnostics as `linear_regression` for the final model plus
+  the order predictors were added in
+- `backward_elimination` — the same idea in reverse: starts from all predictors and removes
+  the least-justified one at a time, by the same four criteria, until removing any remaining
+  one would make the model worse
 - `logistic_regression` — binary outcomes, reports odds ratios + McFadden pseudo-R²
 
 **Time series** (`timeseries`)
