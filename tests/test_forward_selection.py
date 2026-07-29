@@ -14,7 +14,7 @@ def _make_known_structure_data(rng, n=200):
     return pd.DataFrame({"x1": x1, "x2": x2, "x3": x3, "x4": x4, "y": y})
 
 
-@pytest.mark.parametrize("criterion", ["aic", "bic", "p_value"])
+@pytest.mark.parametrize("criterion", ["aic", "bic", "p_value", "mallows_cp"])
 def test_forward_selection_finds_true_predictors_and_stops(tool_ctx, rng, criterion):
     df = _make_known_structure_data(rng)
     handle = tool_ctx.data_manager.register(df, source="upload")
@@ -59,6 +59,37 @@ def test_forward_selection_r_squared_uses_adjusted_r_squared(tool_ctx, rng):
     # each successive step's recorded score must be a strict improvement
     scores = [s["r_squared"] for s in result.raw_summary["steps"]]
     assert scores == sorted(scores)
+
+
+def test_forward_selection_mallows_cp_matches_theory(tool_ctx, rng):
+    # Known property: Cp for the *full* model (all candidates) always equals its own
+    # parameter count exactly, and a well-specified subset should score at or below
+    # its own parameter count -- unlike an under-fit model, whose Cp blows up.
+    df = _make_known_structure_data(rng)
+    handle = tool_ctx.data_manager.register(df, source="upload")
+
+    full = REGISTRY.dispatch(
+        tool_ctx, "linear_regression",
+        {"dataset_id": handle.dataset_id, "target": "y", "predictors": ["x1", "x2", "x3", "x4"]},
+    )
+    assert full.effect_size["r_squared"] > 0  # sanity: the full model fit at all
+
+    result = REGISTRY.dispatch(
+        tool_ctx,
+        "forward_selection",
+        {
+            "dataset_id": handle.dataset_id,
+            "target": "y",
+            "candidate_predictors": ["x1", "x2", "x3", "x4"],
+            "criterion": "mallows_cp",
+        },
+    )
+
+    selected = {s["added"] for s in result.raw_summary["steps"]}
+    assert selected == {"x1", "x2"}
+    final_cp = result.raw_summary["steps"][-1]["mallows_cp"]
+    n_params_selected = len(selected) + 1  # + intercept
+    assert final_cp <= n_params_selected + 1  # well-specified: Cp at or near its own p
 
 
 def test_forward_selection_respects_max_predictors(tool_ctx, rng):

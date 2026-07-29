@@ -13,7 +13,7 @@ def _make_known_structure_data(rng, n=200):
     return pd.DataFrame({"x1": x1, "x2": x2, "x3": x3, "x4": x4, "y": y})
 
 
-@pytest.mark.parametrize("criterion", ["aic", "bic", "p_value"])
+@pytest.mark.parametrize("criterion", ["aic", "bic", "p_value", "mallows_cp"])
 def test_backward_elimination_removes_noise_and_keeps_true_predictors(tool_ctx, rng, criterion):
     df = _make_known_structure_data(rng)
     handle = tool_ctx.data_manager.register(df, source="upload")
@@ -54,6 +54,31 @@ def test_backward_elimination_r_squared_keeps_true_predictors(tool_ctx, rng):
     # each successive removal should improve (or hold steady) adjusted R-squared
     scores = [s["r_squared"] for s in result.raw_summary["steps"]]
     assert scores == sorted(scores)
+
+
+def test_backward_elimination_mallows_cp_matches_theory(tool_ctx, rng):
+    # Known property: a well-specified subset's Cp should sit at or below its own
+    # parameter count; the full model's Cp always equals its own parameter count
+    # exactly, which is the reference every trial subset is scored against here.
+    df = _make_known_structure_data(rng)
+    handle = tool_ctx.data_manager.register(df, source="upload")
+
+    result = REGISTRY.dispatch(
+        tool_ctx,
+        "backward_elimination",
+        {
+            "dataset_id": handle.dataset_id,
+            "target": "y",
+            "predictors": ["x1", "x2", "x3", "x4"],
+            "criterion": "mallows_cp",
+        },
+    )
+
+    removed = {s["removed"] for s in result.raw_summary["steps"]}
+    assert removed == {"x3", "x4"}
+    final_cp = result.raw_summary["steps"][-1]["mallows_cp"]
+    n_params_kept = 2 + 1  # x1, x2 + intercept
+    assert final_cp <= n_params_kept + 1
 
 
 def test_backward_elimination_raises_when_nothing_improves(tool_ctx, rng):

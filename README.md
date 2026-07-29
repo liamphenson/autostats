@@ -105,13 +105,33 @@ prompt changes required.
   weights stabilize
 - `forward_selection` — forward stepwise predictor selection from a candidate pool, by
   `aic`, `bic`, `r_squared` (adjusted — plain R² never decreases, so it can't stop a search),
-  or `p_value`; reports the same diagnostics as `linear_regression` for the final model plus
+  `p_value`, or `mallows_cp` (judged against the residual variance of the full candidate
+  model); reports the same diagnostics as `linear_regression` for the final model plus
   the order predictors were added in
 - `backward_elimination` — the same idea in reverse: starts from all predictors and removes
-  the least-justified one at a time, by the same four criteria, until removing any remaining
+  the least-justified one at a time, by the same five criteria, until removing any remaining
   one would make the model worse
-- `best_subset_selection` — exhaustive feature selection which finds the best combination of predictors for each fixed size, then selects the overall best model using penalized evaluation criteria.
+- `best_subset_selection` — exhaustive feature selection which finds the best combination of
+  predictors for each fixed size, then selects the overall best model using the same five
+  criteria (fails fast with a clear error if the candidate pool would make the exhaustive
+  search excessively slow)
 - `logistic_regression` — binary outcomes, reports odds ratios + McFadden pseudo-R²
+
+**Resampling** (`resampling`)
+- `jackknife` — leave-one-out estimate of a column's mean/median/std/var: reports the
+  actual point estimate (computed on the full sample), the jackknife bias and
+  bias-corrected estimates, standard error, and a 95% CI. Flags the median specifically
+  as an unmet assumption (the jackknife's variance estimate is inconsistent for
+  non-smooth statistics) and recommends a bootstrap-based estimate instead in that case
+- `jackknife_regression` — the same idea applied per regression coefficient: an
+  alternative to OLS's own standard errors, valid under non-normality/heteroscedasticity
+  but *not* under autocorrelated errors (flagged via a Durbin-Watson-based check, since
+  delete-1 case resampling assumes approximately independent observations)
+- `bootstrap` — resamples-with-replacement counterpart to `jackknife` (mean/median/std/var,
+  `n_boot` resamples, `random_state` for reproducibility): reports the same point
+  estimate/bias/bias-corrected estimate/SE shape, plus a percentile-based 95% CI. Unlike
+  `jackknife`, it's valid for the median too — recommended in place of `jackknife` for that
+  case rather than sharing its non-smooth-statistic caveat
 
 **Time series** (`timeseries`)
 - `check_stationarity` — ADF + KPSS (their disagreement is itself surfaced as informative)

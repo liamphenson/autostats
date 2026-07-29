@@ -15,6 +15,8 @@ def load_all_tools() -> None:
     import autostats.core.tools.preprocessing.encoding  # noqa: F401
     import autostats.core.tools.preprocessing.split  # noqa: F401  -- FIX 1: was missing entirely
     import autostats.core.tools.preprocessing.transforms  # noqa: F401
+    import autostats.core.tools.resampling.jackknife  # noqa: F401
+    import autostats.core.tools.resampling.bootstrap  # noqa: F401
     import autostats.core.tools.stats.descriptive  # noqa: F401
     import autostats.core.tools.stats.parametric  # noqa: F401
     import autostats.core.tools.stats.nonparametric  # noqa: F401

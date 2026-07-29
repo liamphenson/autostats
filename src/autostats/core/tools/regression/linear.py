@@ -224,7 +224,33 @@ class IterativelyReweightedLeastSquaresTool(LinearRegressionTool):
         return {"irls_iterations": model.irls_iterations, "irls_converged": model.irls_converged}
 
 
-def _forward_selection_score(model, criterion: str, candidate: str) -> float:
+def _mallows_cp(model, mse_full: float, n: int) -> float:
+    """Mallows' Cp = RSS_p/MSE_full - n + 2p, where p is the number of parameters
+    (including the intercept) in `model`, and MSE_full is the residual mean-square
+    error of the *full* model (all candidate predictors) -- an unbiased estimate of
+    the true error variance against which every subset is judged. Lower is better;
+    for the full model itself Cp always equals p exactly (a useful sanity check),
+    and a well-specified subset scores at or below its own p."""
+    p = len(model.params)
+    return model.ssr / mse_full - n + 2 * p
+
+
+def _mallows_cp_reference(fit_ols_fn, y: pd.Series, data: pd.DataFrame, candidates: list[str]) -> tuple[float, int]:
+    """Fit the full model (all candidates) once, to get the MSE reference Mallow's Cp
+    needs -- this is held fixed across every subset's Cp computation regardless of
+    which subset is currently being scored, so it's computed here, once, up front."""
+    full_model = fit_ols_fn(y, data[candidates])
+    if full_model.mse_resid <= 0:
+        raise ValueError(
+            "Mallow's Cp requires the full model (all candidates) to have positive "
+            "residual variance; this full model has none (a perfect fit)."
+        )
+    return full_model.mse_resid, len(data)
+
+
+def _forward_selection_score(
+    model, criterion: str, candidate: str, mse_full: float | None = None, n: int | None = None
+) -> float:
     if criterion == "aic":
         return model.aic
     if criterion == "bic":
@@ -233,9 +259,13 @@ def _forward_selection_score(model, criterion: str, candidate: str) -> float:
         return model.rsquared_adj
     if criterion == "p_value":
         return model.pvalues[candidate]
+    if criterion == "mallows_cp":
+        return _mallows_cp(model, mse_full, n)
     raise ValueError(f"Unknown criterion: {criterion}")  # pragma: no cover -- guarded by pydantic Literal
 
-def _backward_elimination_score(current_model, trial_model, criterion: str, candidate: str) -> float:
+def _backward_elimination_score(
+    current_model, trial_model, criterion: str, candidate: str, mse_full: float | None = None, n: int | None = None
+) -> float:
     if criterion == "aic":
         return trial_model.aic
     if criterion == "bic":
@@ -246,6 +276,8 @@ def _backward_elimination_score(current_model, trial_model, criterion: str, cand
         # The candidate's own significance BEFORE removal -- `trial_model` excludes it
         # entirely, so its p-value has to come from the current (still-full) model.
         return current_model.pvalues[candidate]
+    if criterion == "mallows_cp":
+        return _mallows_cp(trial_model, mse_full, n)
     raise ValueError(f"Unknown criterion: {criterion}")  # pragma: no cover -- guarded by pydantic Literal
 
 def _forward_selection_is_better(score: float, best_score: float | None, criterion: str) -> bool:
@@ -259,8 +291,8 @@ def _backward_elimination_is_better(score: float, best_score: float | None, crit
     predictor safest/most justified to remove)."""
     if best_score is None:
         return True
-    if criterion in {"aic", "bic"}:
-        return score < best_score  # lower resulting AIC/BIC after removal -> safer to remove
+    if criterion in {"aic", "bic", "mallows_cp"}:
+        return score < best_score  # lower resulting AIC/BIC/Cp after removal -> safer to remove
     # r_squared: higher resulting adjusted R-squared after removal -> safer to remove.
     # p_value: higher (less significant) p-value in the current model -> safer to remove.
     return score > best_score
@@ -273,7 +305,7 @@ def _forward_selection_improves(
         return best_score < p_value_threshold
     if criterion == "r_squared":
         return current_score is None or best_score > current_score
-    return current_score is None or best_score < current_score  # aic/bic: lower is better
+    return current_score is None or best_score < current_score  # aic/bic/mallows_cp: lower is better
 
 def _backward_elimination_improves(
     best_score: float, current_score: float | None, criterion: str, p_value_threshold: float
@@ -283,13 +315,13 @@ def _backward_elimination_improves(
         return best_score > p_value_threshold
     if criterion == "r_squared":
         return current_score is None or best_score > current_score
-    return current_score is None or best_score < current_score  # aic/bic: lower is better
+    return current_score is None or best_score < current_score  # aic/bic/mallows_cp: lower is better
 
 
 class ForwardSelectionInput(ToolInput):
     target: str
     candidate_predictors: list[str]
-    criterion: Literal["aic", "bic", "r_squared", "p_value"] = "aic"
+    criterion: Literal["aic", "bic", "r_squared", "p_value", "mallows_cp"] = "aic"
     p_value_threshold: float = 0.05
     alpha: float = 0.05
     max_predictors: int | None = None
@@ -306,9 +338,11 @@ class ForwardSelectionTool(LinearRegressionTool):
         "*adjusted* R-squared (plain R-squared never decreases as predictors are added, so it "
         "gives no natural stopping point) and adds the candidate giving the highest resulting "
         "adjusted R-squared; 'p_value' adds the candidate whose own coefficient is most "
-        "significant, provided it is below 'p_value_threshold'. Reports the same diagnostics "
-        "as linear_regression for the final selected model, plus the order predictors were "
-        "added in."
+        "significant, provided it is below 'p_value_threshold'; 'mallows_cp' adds the candidate "
+        "giving the lowest Mallow's Cp, computed against the residual variance of the full model "
+        "(all candidate_predictors) -- a well-specified subset scores at or below its own number "
+        "of parameters. Reports the same diagnostics as linear_regression for the final selected "
+        "model, plus the order predictors were added in."
     )
     category = "regression"
     input_model = ForwardSelectionInput
@@ -333,8 +367,15 @@ class ForwardSelectionTool(LinearRegressionTool):
         remaining = list(dict.fromkeys(params.candidate_predictors))
         max_steps = params.max_predictors if params.max_predictors is not None else len(remaining)
 
+        mse_full = n = None
+        if params.criterion == "mallows_cp":
+            mse_full, n = _mallows_cp_reference(self._fit_ols, y, data, remaining)
+
         model = self._fit_ols(y, data[[]])
-        current_score = None if params.criterion == "p_value" else _forward_selection_score(model, params.criterion, None)
+        current_score = (
+            None if params.criterion == "p_value"
+            else _forward_selection_score(model, params.criterion, None, mse_full, n)
+        )
         selected: list[str] = []
         steps: list[dict] = []
 
@@ -342,7 +383,7 @@ class ForwardSelectionTool(LinearRegressionTool):
             best_candidate, best_score, best_model = None, None, None
             for candidate in remaining:
                 trial_model = self._fit_ols(y, data[[*selected, candidate]])
-                score = _forward_selection_score(trial_model, params.criterion, candidate)
+                score = _forward_selection_score(trial_model, params.criterion, candidate, mse_full, n)
                 if _forward_selection_is_better(score, best_score, params.criterion):
                     best_candidate, best_score, best_model = candidate, score, trial_model
 
@@ -380,7 +421,7 @@ class ForwardSelectionTool(LinearRegressionTool):
 class BackwardEliminationInput(ToolInput):
     target: str
     predictors: list[str]
-    criterion: Literal["aic", "bic", "r_squared", "p_value"] = "aic"
+    criterion: Literal["aic", "bic", "r_squared", "p_value", "mallows_cp"] = "aic"
     p_value_threshold: float = 0.05
     alpha: float = 0.05
 
@@ -395,9 +436,11 @@ class BackwardEliminationTool(LinearRegressionTool):
         "*adjusted* R-squared (plain R-squared never decreases as predictors are added, so it "
         "gives no natural stopping point) and removes the predictor giving the highest resulting "
         "adjusted R-squared; 'p_value' removes the predictor whose own coefficient is least "
-        "significant, provided it is above 'p_value_threshold'. Reports the same diagnostics "
-        "as linear_regression for the final selected model, plus the order predictors were "
-        "removed in."
+        "significant, provided it is above 'p_value_threshold'; 'mallows_cp' removes the predictor "
+        "giving the lowest Mallow's Cp, computed against the residual variance of the full model "
+        "(all predictors) -- a well-specified subset scores at or below its own number of "
+        "parameters. Reports the same diagnostics as linear_regression for the final selected "
+        "model, plus the order predictors were removed in."
     )
     category = "regression"
     input_model = BackwardEliminationInput
@@ -413,13 +456,27 @@ class BackwardEliminationTool(LinearRegressionTool):
     def run(self, ctx: ToolContext, params: BackwardEliminationInput) -> BaseModel:
         if not params.predictors:
             raise ValueError("predictors must not be empty")
-        
+
         data = self._load_data(ctx, params)
         y = data[params.target]
         remaining = list(dict.fromkeys(params.predictors))
         model = self._fit_ols(y, data[remaining])
+
+        # The initial full-predictor fit above already *is* the full model Mallow's Cp
+        # needs for its variance reference -- no separate fit required here, unlike
+        # forward_selection/best_subset_selection which don't otherwise fit one.
+        mse_full = n = None
+        if params.criterion == "mallows_cp":
+            if model.mse_resid <= 0:
+                raise ValueError(
+                    "Mallow's Cp requires the full model (all predictors) to have positive "
+                    "residual variance; this full model has none (a perfect fit)."
+                )
+            mse_full, n = model.mse_resid, len(data)
+
         current_score = (
-            None if params.criterion == "p_value" else _backward_elimination_score(model, model, params.criterion, None)
+            None if params.criterion == "p_value"
+            else _backward_elimination_score(model, model, params.criterion, None, mse_full, n)
         )
         removed: list[str] = []
         steps: list[dict] = []
@@ -428,7 +485,7 @@ class BackwardEliminationTool(LinearRegressionTool):
             best_candidate, best_score, best_model = None, None, None
             for candidate in remaining:
                 trial_model = self._fit_ols(y, data[[c for c in remaining if c != candidate]])
-                score = _backward_elimination_score(model, trial_model, params.criterion, candidate)
+                score = _backward_elimination_score(model, trial_model, params.criterion, candidate, mse_full, n)
                 if _backward_elimination_is_better(score, best_score, params.criterion):
                     best_candidate, best_score, best_model = candidate, score, trial_model
 
@@ -474,7 +531,9 @@ def _total_subset_count(n_candidates: int, max_predictors: int) -> int:
     return sum(math.comb(n_candidates, k) for k in range(1, k_max + 1))
 
 
-def _best_subset_score(model, criterion: str, predictors: list[str]) -> float:
+def _best_subset_score(
+    model, criterion: str, predictors: list[str], mse_full: float | None = None, n: int | None = None
+) -> float:
     if criterion == "aic":
         return model.aic
     if criterion == "bic":
@@ -487,13 +546,15 @@ def _best_subset_score(model, criterion: str, predictors: list[str]) -> float:
         # candidate the way forward/backward selection score p_value, since best-subset
         # scores a whole subset at once, not one addition/removal.
         return max(model.pvalues[p] for p in predictors)
+    if criterion == "mallows_cp":
+        return _mallows_cp(model, mse_full, n)
     raise ValueError(f"Unknown criterion: {criterion}")  # pragma: no cover -- guarded by pydantic Literal
 
 
 class BestSubsetSelectionInput(ToolInput):
     target: str
     candidate_predictors: list[str]
-    criterion: Literal["aic", "bic", "r_squared", "p_value"] = "aic"
+    criterion: Literal["aic", "bic", "r_squared", "p_value", "mallows_cp"] = "aic"
     max_predictors: int = 10
     alpha: float = 0.05
 
@@ -506,11 +567,14 @@ class BestSubsetSelectionTool(LinearRegressionTool):
         "under 'criterion'. Criteria: 'aic'/'bic' select the model with the lowest AIC/BIC; "
         "'r_squared' selects the model with the highest *adjusted* R-squared; 'p_value' selects "
         "the model whose least significant predictor is most significant, provided it is below "
-        "'alpha' (subsets with any less-significant predictor are excluded). This is exhaustive "
-        "and can be slow for a large candidate pool -- it fails fast with a clear error if the "
-        "number of models to fit would be excessive; use forward_selection or backward_elimination "
-        "instead in that case. Reports the same diagnostics as linear_regression for the final "
-        "selected model, plus the predictors in that model."
+        "'alpha' (subsets with any less-significant predictor are excluded); 'mallows_cp' selects "
+        "the model with the lowest Mallow's Cp, computed against the residual variance of the "
+        "full model (all candidate_predictors) -- a well-specified subset scores at or below its "
+        "own number of parameters. This is exhaustive and can be slow for a large candidate pool "
+        "-- it fails fast with a clear error if the number of models to fit would be excessive; "
+        "use forward_selection or backward_elimination instead in that case. Reports the same "
+        "diagnostics as linear_regression for the final selected model, plus the predictors in "
+        "that model."
     )
     category = "regression"
     input_model = BestSubsetSelectionInput
@@ -551,12 +615,17 @@ class BestSubsetSelectionTool(LinearRegressionTool):
 
         data = self._load_data(ctx, params)
         y = data[params.target]
+
+        mse_full = n = None
+        if params.criterion == "mallows_cp":
+            mse_full, n = _mallows_cp_reference(self._fit_ols, y, data, candidates)
+
         best_model, best_score, best_predictors = None, None, None
 
         for k in range(1, min(params.max_predictors, len(candidates)) + 1):
             for subset in itertools.combinations(candidates, k):
                 trial_model = self._fit_ols(y, data[list(subset)])
-                score = _best_subset_score(trial_model, params.criterion, list(subset))
+                score = _best_subset_score(trial_model, params.criterion, list(subset), mse_full, n)
                 if params.criterion == "p_value" and score >= params.alpha:
                     continue  # at least one predictor in this subset isn't significant enough
                 if _forward_selection_is_better(score, best_score, params.criterion):
